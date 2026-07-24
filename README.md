@@ -16,7 +16,7 @@ El entorno fue implementado en la región `us-east-1` de AWS, utilizando **3 ins
 
 ## ⚙️ Inicialización del Control Plane y Red Overlay
 
-La inicialización se realizó vinculando explícitamente el socket de Containerd y reservando el bloque de IPs lógicas para el posterior despliegue del plugin de red **Calico**:
+La inicialización se realizó vinculando explícitamente el socket de Containerd y reservando el bloque de IPs lógicas para el posterior despliegue del plugin de red **Calico**::
 
 ```bash
 sudo kubeadm init --cri-socket /run/containerd/containerd.sock --pod-network-cidr=192.168.0.0/16
