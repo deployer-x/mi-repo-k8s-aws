@@ -25,7 +25,7 @@ El proyecto se divide lógicamente en la preparación del sistema operativo base
 * **`nginx-deployment.yaml`:** Manifiesto declarativo que instruye al clúster a desplegar 2 réplicas (Pods) del servidor web Nginx, distribuyéndolas en los Nodos Workers disponibles.
 * **`nginx-service-nodeport.yaml`:** Manifiesto de servicio que expone el despliegue anterior hacia el exterior, abriendo el puerto 32000 en las direcciones IP físicas de los nodos de AWS.
 
-## ⚙️ Inicialización del Control Plane y Red Overlay
+## Inicialización del Control Plane y Red Overlay
 
 La inicialización se realizó vinculando explícitamente el socket de Containerd y reservando el bloque de IPs lógicas para el posterior despliegue del plugin de red **Calico**::
 
@@ -51,7 +51,7 @@ Finalmente, desplegar el plugin de red (CNI) ejecutando el cuarto script:
 bash scripts/04-install-calico.sh
 ```
 
-## 🎥 Demostración Práctica
+## Demostración Práctica
 
 El proceso completo interactivo, desde la configuración pura en Linux hasta la unión de los Workers y la validación en estado Ready, está documentado en video:
 [👉 https://youtu.be/3GyBn6LX6y8?si=dmh467TfGyIsdlcX](https://youtu.be/3GyBn6LX6y8?si=dmh467TfGyIsdlcX)
