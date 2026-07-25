@@ -13,21 +13,21 @@ El entorno fue implementado en la región `us-east-1` de AWS, utilizando **3 ins
 
 El proyecto se divide lógicamente en la preparación del sistema operativo base (scripts) y la declaración de recursos en el clúster (manifests).
 
-### /scripts` (Aprovisionamiento y Configuración Base)
+### /scripts (Aprovisionamiento y Configuración Base)
 
 * **`01-prepare-os.sh`:** Configura el Kernel de Linux. Desactiva la memoria Swap, carga los módulos necesarios (`overlay`, `br_netfilter`) y activa el reenvío de paquetes IPv4 (`net.ipv4.ip_forward=1`) para permitir el ruteo interno.
 * **`02-install-containerd.sh`:** Instala el runtime de contenedores (*Containerd*) y lo configura para delegar la gestión de recursos (CPU/RAM) a *systemd* mediante la directiva `SystemdCgroup = true`.
 * **`03-install-k8s-tools.sh`:** Descarga las llaves GPG oficiales de Kubernetes e instala los componentes base del sistema: `kubeadm` (bootstrap), `kubelet` (agente del nodo) y `kubectl` (CLI).
 * **`04-install-calico.sh`:** Ejecuta el manifiesto oficial para desplegar la red Overlay (Calico CNI), permitiendo el enrutamiento BGP y el encapsulamiento IP-in-IP entre los nodos.
 
-### /manifests` (Prueba de Humo / Smoke Test)
+### /manifests (Prueba de Humo / Smoke Test)
 
 * **`nginx-deployment.yaml`:** Manifiesto declarativo que instruye al clúster a desplegar 2 réplicas (Pods) del servidor web Nginx, distribuyéndolas en los Nodos Workers disponibles.
 * **`nginx-service-nodeport.yaml`:** Manifiesto de servicio que expone el despliegue anterior hacia el exterior, abriendo el puerto 32000 en las direcciones IP físicas de los nodos de AWS.
 
 ## Inicialización del Control Plane y Red Overlay
 
-La inicialización se realizó vinculando explícitamente el socket de Containerd y reservando el bloque de IPs lógicas para el posterior despliegue del plugin de red **Calico**::
+La inicialización se realizó vinculando explícitamente el socket de Containerd y reservando el bloque de IPs lógicas para el posterior despliegue del plugin de red **Calico**:
 
 ```bash
 sudo kubeadm init --cri-socket /run/containerd/containerd.sock --pod-network-cidr=192.168.0.0/16
