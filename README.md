@@ -20,10 +20,19 @@ El proyecto se divide lógicamente en la preparación del sistema operativo base
 * **`03-install-k8s-tools.sh`:** Descarga las llaves GPG oficiales de Kubernetes e instala los componentes base del sistema: `kubeadm` (bootstrap), `kubelet` (agente del nodo) y `kubectl` (CLI).
 * **`04-install-calico.sh`:** Ejecuta el manifiesto oficial para desplegar la red Overlay (Calico CNI), permitiendo el enrutamiento BGP y el encapsulamiento IP-in-IP entre los nodos.
 
-### /manifests (Prueba de Humo / Smoke Test)
+### /manifests
 
-* **`nginx-deployment.yaml`:** Manifiesto declarativo que instruye al clúster a desplegar 2 réplicas (Pods) del servidor web Nginx, distribuyéndolas en los Nodos Workers disponibles.
-* **`nginx-service-nodeport.yaml`:** Manifiesto de servicio que expone el despliegue anterior hacia el exterior, abriendo el puerto 32000 en las direcciones IP físicas de los nodos de AWS.
+Los manifiestos de este directorio están estructurados para replicar las dos fases de la metodología de investigación detallada en el informe:
+
+**Fase 1: Validación de Conectividad (Smoke Test)**
+
+* **`nginx-deployment.yaml`:** Manifiesto declarativo que despliega 2 réplicas del servidor web Nginx. Su objetivo es forzar la distribución de Pods en distintos Nodos Workers para validar que Calico asigne correctamente el bloque de IPs lógicas (192.168.x.x) ignorando la red física de AWS.
+* **`nginx-service-nodeport.yaml`:** Expone el despliegue de Nginx abriendo el puerto 32000, permitiendo comprobar el ruteo HTTP básico y el balanceo de carga.
+
+**Fase 2: Medición de Rendimiento y Overhead (Gap Experimental)**
+
+* **`iperf3-server.yaml`:** Despliega un Pod en modo servidor ejecutando la herramienta de pruebas de red `iperf3` a la escucha en un Nodo Worker.
+* **`iperf3-client.yaml`:** Instancia un Pod cliente utilizado para inyectar tráfico TCP masivo hacia el servidor a través de la red Overlay (túnel IP-in-IP). Esto permite cuantificar la caída de ancho de banda y la latencia generada por el encapsulamiento respecto a la red nativa de AWS.
 
 ## Inicialización del Control Plane y Red Overlay
 
