@@ -1,66 +1,54 @@
-# Despliegue Manual de Kubernetes en AWS ("The Hard Way")
+# Evaluación del CPU Throttling sobre Redes Overlay (Calico) en Kubernetes
 
 Este repositorio contiene los scripts de aprovisionamiento de infraestructura (Capa de SO) y los manifiestos declarativos utilizados para validar el clúster de Kubernetes, como parte del **Trabajo Final Integrador de Sistemas Operativos y Redes 2**.
 
+A diferencia de los benchmarks tradicionales, este proyecto evalúa empíricamente la degradación de la estabilidad de red para tráfico UDP (Jitter y pérdida de paquetes) cuando los nodos subyacentes agotan sus créditos de CPU.
+
 ## Arquitectura Desplegada
 
-El entorno fue implementado en la región `us-east-1` de AWS, utilizando **3 instancias tipo `t2.medium`** (Ubuntu Server 22.04 LTS) para soportar adecuadamente el Control Plane y evitar excepciones por *OOMKill*:
+El entorno fue implementado en la región `us-east-1` de AWS, utilizando **3 instancias tipo `t2.medium` (Burstable)** (Ubuntu Server 22.04 LTS). La elección de esta familia de instancias es crítica para el experimento, ya que permite aislar el fenómeno de estrangulamiento físico del hipervisor:
 
-* **1 Nodo Master:** Gestiona la API, el Scheduler y etcd.
-* **2 Nodos Workers:** Encargados de ejecutar las cargas de trabajo (Pods).
+* **1 Nodo Master:** Gestiona el Control Plane (API, Scheduler, etcd).
+* **2 Nodos Workers:** Ejecutan las cargas de trabajo (Pods) y son sometidos a estrés computacional.
 
-## Estructura del Repositorio y Descripción de Archivos
+## Estructura del Repositorio
 
-El proyecto se divide lógicamente en la preparación del sistema operativo base (scripts) y la declaración de recursos en el clúster (manifests).
+### /scripts (Aprovisionamiento y Estrés)
 
-### /scripts (Aprovisionamiento y Configuración Base)
+* **`01-prepare-os.sh` a `04-install-calico.sh`:** Configuración base "The Hard Way". Desactivación de Swap, carga de módulos `overlay` y `br_netfilter`, instalación de Containerd/Kubeadm, y despliegue del túnel IP-in-IP mediante Calico CNI.
+* **`05-induce-throttling.sh`:** (NUEVO) Script que instala y ejecuta `stress-ng` para forzar a la instancia anfitriona al 100% de carga, consumiendo artificialmente el *CPUCreditBalance* de AWS hasta provocar el estrangulamiento térmico/lógico.
 
-* **`01-prepare-os.sh`:** Configura el Kernel de Linux. Desactiva la memoria Swap, carga los módulos necesarios (`overlay`, `br_netfilter`) y activa el reenvío de paquetes IPv4 (`net.ipv4.ip_forward=1`) para permitir el ruteo interno.
-* **`02-install-containerd.sh`:** Instala el runtime de contenedores (*Containerd*) y lo configura para delegar la gestión de recursos (CPU/RAM) a *systemd* mediante la directiva `SystemdCgroup = true`.
-* **`03-install-k8s-tools.sh`:** Descarga las llaves GPG oficiales de Kubernetes e instala los componentes base del sistema: `kubeadm` (bootstrap), `kubelet` (agente del nodo) y `kubectl` (CLI).
-* **`04-install-calico.sh`:** Ejecuta el manifiesto oficial para desplegar la red Overlay (Calico CNI), permitiendo el enrutamiento BGP y el encapsulamiento IP-in-IP entre los nodos.
+### /manifests (Laboratorio UDP)
 
-### /manifests
+* **`iperf3-server.yaml`:** Despliega un Pod en modo servidor a la escucha en el Nodo Worker 1.
+* **`iperf3-client.yaml`:** Instancia un Pod cliente en el Nodo Worker 2. Se utiliza para inyectar datagramas UDP masivos a través de la red Overlay encapsulada.
 
-Los manifiestos de este directorio están estructurados para replicar las dos fases de la metodología de investigación detallada en el informe:
+## Metodología de Ejecución (El Experimento)
 
-**Fase 1: Validación de Conectividad (Smoke Test)**
+Una vez inicializado el clúster con `kubeadm` y desplegado el CNI, el experimento consta de dos fases:
 
-* **`nginx-deployment.yaml`:** Manifiesto declarativo que despliega 2 réplicas del servidor web Nginx. Su objetivo es forzar la distribución de Pods en distintos Nodos Workers para validar que Calico asigne correctamente el bloque de IPs lógicas (192.168.x.x) ignorando la red física de AWS.
-* **`nginx-service-nodeport.yaml`:** Expone el despliegue de Nginx abriendo el puerto 32000, permitiendo comprobar el ruteo HTTP básico y el balanceo de carga.
+### Fase 1: Línea Base (Red Sana / 100% Créditos de CPU)
 
-**Fase 2: Medición de Rendimiento y Overhead (Gap Experimental)**
-
-* **`iperf3-server.yaml`:** Despliega un Pod en modo servidor ejecutando la herramienta de pruebas de red `iperf3` a la escucha en un Nodo Worker.
-* **`iperf3-client.yaml`:** Instancia un Pod cliente utilizado para inyectar tráfico TCP masivo hacia el servidor a través de la red Overlay (túnel IP-in-IP). Esto permite cuantificar la caída de ancho de banda y la latencia generada por el encapsulamiento respecto a la red nativa de AWS.
-
-## Inicialización del Control Plane y Red Overlay
-
-La inicialización se realizó vinculando explícitamente el socket de Containerd y reservando el bloque de IPs lógicas para el posterior despliegue del plugin de red **Calico**:
+Se mide la estabilidad del túnel IP-in-IP bajo condiciones óptimas inyectando 100 Mbps de tráfico UDP.
 
 ```bash
-sudo kubeadm init --cri-socket /run/containerd/containerd.sock --pod-network-cidr=192.168.0.0/16
+kubectl exec -it iperf3-client -- iperf3 -c 192.168.1.5 -u -b 100M -t 10
 ```
 
-# Configurar kubeconfig para el usuario actual
+*(El Jitter esperado se mantiene por debajo de 0.05 ms con 0% de pérdida de paquetes).*
 
-Una vez inicializado el clúster, se debe configurar el entorno del usuario y desplegar el plugin de red (CNI) ejecutando el cuarto script:
+### Fase 2: Inducción de Estrés (Gap de Investigación)
+
+Se ejecuta la herramienta de estrés dentro del nodo Worker 1 para agotar los créditos del procesador:
 
 ```bash
-mkdir -p $HOME/.kube
-sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
-sudo chown $(id -u):$(id -g) $HOME/.kube/config
+bash scripts/05-induce-throttling.sh
 ```
 
-# Desplegar Calico
-
-Finalmente, desplegar el plugin de red (CNI) ejecutando el cuarto script:
+Una vez que el nodo entra en estado *Throttled*, se repite exactamente la misma medición UDP:
 
 ```bash
-bash scripts/04-install-calico.sh
+kubectl exec -it iperf3-client -- iperf3 -c 192.168.1.5 -u -b 100M -t 10
 ```
 
-## Demostración Práctica
-
-El proceso completo interactivo, desde la configuración pura en Linux hasta la unión de los Workers y la validación en estado Ready, está documentado en video:
-[👉 https://youtu.be/3GyBn6LX6y8?si=dmh467TfGyIsdlcX](https://youtu.be/3GyBn6LX6y8?si=dmh467TfGyIsdlcX)
+*(Al quedarse sin ciclos de reloj para que el kernel envuelva los paquetes mediante iptables, se evidencia una degradación catastrófica superando los 6.8 ms de Jitter y el descarte de hasta un 17% del tráfico en tiempo real).*
