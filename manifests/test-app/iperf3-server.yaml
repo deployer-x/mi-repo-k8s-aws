@@ -5,11 +5,10 @@ metadata:
   labels:
     app: iperf3-server
 spec:
+  nodeName: ip-10-0-14-17 # <-- Cambiado para coincidir con la tesis
   containers:
   - name: iperf3
     image: networkstatic/iperf3
     args: ['-s']
     ports:
     - containerPort: 5201
-  nodeSelector:
-    kubernetes.io/hostname: ip-10-0-14-17 # O el nombre de tu Worker 1

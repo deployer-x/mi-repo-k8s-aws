@@ -3,9 +3,8 @@ kind: Pod
 metadata:
   name: iperf3-client
 spec:
+  nodeName: ip-10-0-4-64 # <-- Cambiado para coincidir con la tesis
   containers:
   - name: iperf3
     image: networkstatic/iperf3
     command: ['sleep', 'infinity']
-  nodeSelector:
-    kubernetes.io/hostname: ip-10-0-4-64 # O el nombre de tu Worker 2
