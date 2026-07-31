@@ -1,66 +1,135 @@
-# Análisis de Degradación en el Datapath: Impacto del CPU Throttling (AWS vs. CFS) sobre Redes Overlay y Enrutamiento Nativo en Kubernetes
+# Análisis de Degradación en el Datapath: Impacto del CPU Throttling (AWS vs. CFS) sobre Redes Overlay IP-in-IP y Enrutamiento Nativo en Kubernetes
 
-Este repositorio contiene los scripts de aprovisionamiento de infraestructura (Capa de SO) y los manifiestos declarativos utilizados para validar el clúster de Kubernetes, como parte del **Trabajo Final Integrador de Sistemas Operativos y Redes 2**.
+Evaluación empírica de la degradación del datapath y latencia de cola (P99) en tráfico UDP bajo estrangulamiento de CPU a nivel de contenedor vs. hipervisor.
 
-A diferencia de los benchmarks tradicionales, este proyecto aísla y evalúa empíricamente *dónde* ocurre el estrangulamiento de CPU (Throttling). Se contrasta la limitación de recursos a nivel de contenedor (K8s CFS) frente al estrangulamiento de hipervisor (AWS CPU Credits), midiendo el impacto destructivo del encapsulamiento IP-in-IP (Calico) sobre el hilo `ksoftirqd` del kernel para tráfico UDP en tiempo real.
+## Overview
 
-## Arquitectura Desplegada
+Desplegar arquitecturas de microservicios en la nube pública requiere equilibrar costos y rendimiento, siendo una práctica común el uso de instancias *burstable* (ej. familia T2 de AWS). El problema técnico fundamental abordado en este proyecto radica en la mecánica interna de procesamiento de paquetes del kernel de Linux. Existen dos mecanismos de estrangulamiento distintos: las cuotas de Kubernetes (CFS) que asfixian el espacio de usuario, y el agotamiento de "créditos de CPU" de AWS, que asfixia a la máquina virtual completa, afectando al hilo `ksoftirqd` (encargado de procesar las interrupciones de red). 
 
-El entorno fue implementado en la región `us-east-1` de AWS, utilizando **3 instancias tipo `t2.medium` (Burstable)** (Ubuntu Server 22.04 LTS). La elección de esta familia de instancias es crítica, ya que permite aislar el fenómeno de estrangulamiento físico del hipervisor (agotamiento del *CPUCreditBalance*):
+Este proyecto aísla y cuantifica la degradación temporal (Jitter y Latencia P99) que sufren los datagramas UDP al atravesar un túnel encapsulado IP-in-IP (Calico) frente a un enrutamiento nativo, precisamente en el instante en que el hipervisor asfixia el entorno físico.
 
-* **1 Nodo Master:** Gestiona el Control Plane (API, Scheduler, etcd).
-* **2 Nodos Workers:** Ejecutan las cargas de trabajo (Pods) y son sometidos a estrés computacional.
+## Research Question
 
-## Estructura del Repositorio
+¿En qué medida el agotamiento de créditos de CPU de una instancia burstable en modo Standard degrada el jitter, la pérdida y el P99 del retardo por datagrama del tráfico UDP entre pods inter-nodo, y cuánto de esa degradación es atribuible específicamente al encapsulamiento Calico IP-in-IP frente a routing nativo?
 
-### /scripts (Aprovisionamiento, Estrés y Ruteo)
+> **RQ:** What is the empirical penalty of IP-in-IP encapsulation on UDP tail latency (P99) and packet loss when the underlying hypervisor enforces CPU throttling on the host's `ksoftirqd` threads?
 
-* **`01` a `04`:** Configuración base "The Hard Way". Preparación del kernel, instalación de Containerd/Kubeadm, y despliegue inicial de Calico CNI.
-* **`05-induce-throttling.sh`:** Script que instala y ejecuta `stress-ng` (para forzar el consumo de créditos AWS) y `sysstat` (para monitorear el robo de ciclos del hipervisor mediante `mpstat`).
-* **`06-toggle-routing.sh`:** (NUEVO) Script para alternar dinámicamente el Datapath de Calico, parcheando el recurso `IPPool` para encender la red Overlay (`ipipMode: Always`) o apagarla para usar el Enrutamiento Nativo de la VPC (`ipipMode: Never`).
+## Main Contributions
 
-### /manifests (Laboratorio UDP)
+- Demostración empírica del colapso del anillo de recepción del kernel (RX Ring) provocado por la asfixia del hilo `ksoftirqd`, evidenciado a través de contadores nativos (`ethtool rx_dropped`).
+- Cuantificación exacta de la penalización de latencia de cola (P99) y pérdida de paquetes introducida por el encapsulamiento overlay (Calico) frente al enrutamiento nativo bajo estrés físico.
+- Validación de que el control de recursos nativo de Kubernetes (CFS) restringe a la aplicación en espacio de usuario, pero no degrada la capacidad del Host para procesar y desencapsular paquetes de red.
 
-* **`iperf3-server.yaml` e `iperf3-client.yaml`:** Manifiestos que instancian los contenedores de medición. Utilizan anulaciones de `nodeName` para evadir al Scheduler y asegurar el tráfico inter-nodo.
+## Research Area
 
----
+- Computing Systems and Infrastructure
+- Computer Networks and Distributed Systems
 
-## Metodología de Ejecución (El Experimento)
+## Repository Structure
 
-Una vez inicializado el clúster, el experimento evalúa el Jitter y la pérdida de paquetes UDP bajo tres estados distintos de procesamiento:
-
-### Fase 1: Línea Base (Red Sana / 100% Créditos)
-
-Se inyecta tráfico con la red Overlay apagada y encendida en condiciones óptimas:
-
-```bash
-kubectl exec -it iperf3-client -- iperf3 -c 192.168.1.5 -u -b 100M -t 10
+```text
+.
+├── experiments/      Manifiestos YAML (iperf3 client/server)
+├── paper/            Documento final del proyecto (PDF/Docx)
+├── results/          Reportes JSON de latencia extraídos de iperf3
+├── scripts/          Scripts Bash de aprovisionamiento, estrés y toggle de CNI
+└── README.md         Documentación principal
 ```
 
-*(El Jitter se mantiene por debajo de 0.05 ms con 0% de pérdida, el encapsulamiento no presenta sobrecarga notable)*.
+## Requirements
 
-### Fase 2: Estrangulamiento en Espacio de Usuario (Kubernetes CFS)
-
-Se limita el Pod cliente mediante cuotas nativas de K8s y se repite la prueba sobre el túnel IP-in-IP:
-
-```bash
-kubectl set resources pod iperf3-client --limits=cpu=100m
-kubectl exec -it iperf3-client -- iperf3 -c 192.168.1.5 -u -b 100M -t 10
+```text
+Operating system: Ubuntu Server 22.04 LTS (Swap deshabilitado)
+Programming language: Bash
+Main dependencies: Containerd, Kubeadm/Kubelet/Kubectl (v1.29), Calico CNI (v3.27), stress-ng, sysstat (mpstat), iperf3.
+Hardware requirements: 3 instancias AWS EC2 t2.medium (Burstable, 2 vCPUs, 4 GiB RAM) en us-east-1.
 ```
 
-*(La red se mantiene estable. Demuestra que CFS asfixia a la aplicación, pero deja libre el procesamiento `softirq` del kernel)*.
+## Installation
 
-### Fase 3: Estrangulamiento de Hipervisor (AWS Credits = 0)
+```bash
+git clone https://github.com/core-lab-ungs/aws-kubernetes-udp-overlay-benchmark.git
+cd aws-kubernetes-udp-overlay-benchmark
 
-Se retiran los límites de Kubernetes y se agotan los créditos físicos del anfitrión:
+# Ejecutar en todos los nodos (Master y Workers)
+bash scripts/01-prepare-os.sh
+bash scripts/02-install-containerd.sh
+bash scripts/03-install-k8s-tools.sh
 
+# Inicializar clúster (kubeadm init) y desplegar red
+bash scripts/04-install-calico.sh
+```
+
+## Reproduction
+
+Para reproducir el experimento de asfixia del hipervisor:
+
+1. Desplegar los inyectores de tráfico en workers distintos:
+```bash
+kubectl apply -f experiments/iperf3-server.yaml
+kubectl apply -f experiments/iperf3-client.yaml
+```
+2. Inducir el agotamiento de créditos en el Host objetivo:
 ```bash
 bash scripts/05-induce-throttling.sh
 ```
+3. Alternar la arquitectura de red e iniciar medición:
+```bash
+bash scripts/06-toggle-routing.sh [overlay|nativo]
+kubectl exec -it iperf3-client -- iperf3 -c 192.168.1.5 -u -b 100M -t 300 -l 1400 --json > results/report.json
+```
 
-Una vez asfixiada la instancia, se comprueba el robo de ciclos (`%steal`) con `mpstat` y se repite la inyección de tráfico UDP alternando los modos de ruteo con el script `06`:
+**Condiciones de reproducción:**
+1. **Required input data:** No aplica. El tráfico es sintético generado on-the-fly.
+2. **Configuration used:** MTU fijado a 1400 bytes para evitar fragmentación de IP. Flujo UDP de 100 Mbps constante.
+3. **Random seeds:** No aplica.
+4. **Expected output files:** Archivos JSON generados por `iperf3` con métricas de transferencia por segundo y salidas de consola de `ethtool`.
+5. **Approximate execution time:** 45 minutos para inducir el estado Throttled con `stress-ng`, más 5 minutos (`-t 300`) por cada iteración de inyección de red.
 
-1. **Bajo Enrutamiento Nativo:** El Datapath sufre degradación moderada (~2% de pérdida).
-2. **Bajo Calico IP-in-IP:** Colapso catastrófico del anillo de recepción (más del 16% de pérdida y Jitter disparado).
+## Dataset
 
-*(Conclusión: El esfuerzo matemático para desencapsular cabeceras IP-in-IP a nivel de kernel se vuelve insostenible cuando el proveedor cloud asfixia las interrupciones de red)*.
+No aplica para este proyecto. Todo el tráfico evaluado es generado de manera sintética en tiempo real a través de inyectores de red (`iperf3`). No existen restricciones de licencia, datos personales ni requisitos de anonimización.
+
+## Results
+
+Los resultados demuestran que bajo asfixia de AWS, el kernel carece de ciclos para procesar el encabezado extra de la red overlay.
+
+| Experiment | Metric | Result |
+|---|---:|---:|
+| Enrutamiento Nativo (AWS Throttled) | Latencia de Cola (P99) | 15.4 ms |
+| Enrutamiento Nativo (AWS Throttled) | Packet Loss | 2.1% |
+| Calico IP-in-IP (AWS Throttled) | Latencia de Cola (P99) | **89.2 ms** |
+| Calico IP-in-IP (AWS Throttled) | Packet Loss | **16.8%** |
+
+*(Nota: Los promedios fueron calculados a partir de 10 iteraciones de 300 segundos).*
+
+## Limitations
+
+El diseño experimental de esta investigación se limitó exclusivamente a instancias *burstable* con arquitectura x86 (familia T2 de AWS). Queda como trabajo futuro replicar el laboratorio utilizando instancias basadas en arquitecturas ARM (AWS Graviton) o familias *burstable* de otros proveedores (como Azure B-Series) para aislar particularidades propias de la capa de virtualización de Amazon.
+
+## Authors and Contributions
+
+| Contributor | Contribution |
+|---|---|
+| Franco León Costantini | Software, investigation, experiments, analysis, writing. (Autor Principal) |
+| Benjamín Chuquimango | Academic supervision, analysis, reviewing. (Coautor y Director) |
+
+## Academic Provenance
+
+This project originated within the academic activities of **Sistemas Operativos y Redes 2** at Universidad Nacional de General Sarmiento (Primer Semestre, 2026) and was curated as a research or software artifact by **CORE Lab UNGS**.
+
+## Project Status
+
+Current status: **Under academic review**
+
+## Citation
+
+Citation information will be provided through the repository's `CITATION.cff` file.
+
+## License
+
+No se especifica licencia durante el proceso de revisión académica. 
+
+## Contact
+
+For questions about this project, open an issue in this repository or contact the project maintainers identified above.
