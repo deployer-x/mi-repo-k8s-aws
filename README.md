@@ -10,15 +10,15 @@ Este proyecto aísla y cuantifica la degradación temporal (Jitter y Latencia P9
 
 ## Research Question
 
-¿En qué medida el agotamiento de créditos de CPU de una instancia burstable en modo Standard degrada el jitter, la pérdida y el P99 del retardo por datagrama del tráfico UDP entre pods inter-nodo, y cuánto de esa degradación es atribuible específicamente al encapsulamiento Calico IP-in-IP frente a routing nativo?
+¿En qué medida el agotamiento de créditos de CPU de una instancia burstable en modo Standard degrada el jitter, la pérdida y el P99 del retardo por datagrama del tráfico UDP entre pods inter-nodo, y cuánto de esa degradación está fuertemente vinculada al encapsulamiento Calico IP-in-IP frente a routing nativo?
 
 > **RQ:** What is the empirical penalty of IP-in-IP encapsulation on UDP tail latency (P99) and packet loss when the underlying hypervisor enforces CPU throttling on the host's `ksoftirqd` threads?
 
 ## Main Contributions
 
-- Demostración empírica del colapso del anillo de recepción del kernel (RX Ring) provocado por la asfixia del hilo `ksoftirqd`, evidenciado a través de contadores nativos (`ethtool rx_dropped`).
+- Demostración empírica de la degradación severa del anillo de recepción del kernel (RX Ring) provocada por la asfixia del hilo `ksoftirqd`, evidenciado a través de contadores nativos (`ethtool rx_dropped`).
 - Cuantificación exacta de la penalización de latencia de cola (P99) y pérdida de paquetes introducida por el encapsulamiento overlay (Calico) frente al enrutamiento nativo bajo estrés físico.
-- Validación de que el control de recursos nativo de Kubernetes (CFS) restringe a la aplicación en espacio de usuario, pero no degrada la capacidad del Host para procesar y desencapsular paquetes de red.
+- Validación de que el control de recursos nativo de Kubernetes (CFS) restringe a la aplicación en espacio de usuario, pero no degrada la capacidad del Host para procesar y desencapsular paquetes de red de manera fluida.
 
 ## Research Area
 
@@ -31,7 +31,7 @@ Este proyecto aísla y cuantifica la degradación temporal (Jitter y Latencia P9
 .
 ├── experiments/      Manifiestos YAML (iperf3 client/server)
 ├── paper/            Documento final del proyecto (PDF/Docx)
-├── results/          Reportes JSON de latencia extraídos de iperf3
+├── results/          Contiene RESULTS.md, calculate_p99.py y los JSONs de iperf3
 ├── scripts/          Scripts Bash de aprovisionamiento, estrés y toggle de CNI
 └── README.md         Documentación principal
 ```
@@ -40,15 +40,15 @@ Este proyecto aísla y cuantifica la degradación temporal (Jitter y Latencia P9
 
 ```text
 Operating system: Ubuntu Server 22.04 LTS (Swap deshabilitado)
-Programming language: Bash
-Main dependencies: Containerd, Kubeadm/Kubelet/Kubectl (v1.29), Calico CNI (v3.27), stress-ng, sysstat (mpstat), iperf3.
+Programming language: Bash, Python 3 (para cálculo de percentiles)
+Main dependencies: Containerd, Kubeadm/Kubelet/Kubectl (v1.29), Calico CNI (v3.27), stress-ng, sysstat (mpstat), iperf3, numpy.
 Hardware requirements: 3 instancias AWS EC2 t2.medium (Burstable, 2 vCPUs, 4 GiB RAM) en us-east-1.
 ```
 
 ## Installation
 
 ```bash
-git clone https://github.com/core-lab-ungs/aws-kubernetes-udp-overlay-benchmark.git
+git clone [https://github.com/core-lab-ungs/aws-kubernetes-udp-overlay-benchmark.git](https://github.com/core-lab-ungs/aws-kubernetes-udp-overlay-benchmark.git)
 cd aws-kubernetes-udp-overlay-benchmark
 
 # Ejecutar en todos los nodos (Master y Workers)
@@ -76,14 +76,18 @@ bash scripts/05-induce-throttling.sh
 3. Alternar la arquitectura de red e iniciar medición:
 ```bash
 bash scripts/06-toggle-routing.sh [overlay|nativo]
-kubectl exec -it iperf3-client -- iperf3 -c 192.168.1.5 -u -b 100M -t 300 -l 1400 --json > results/report.json
+kubectl exec -it iperf3-client -- iperf3 -c 192.168.1.5 -u -b 100M -t 300 -l 1400 --json > results/run_X.json
+```
+4. Calcular el P99 utilizando el script provisto:
+```bash
+python3 results/calculate_p99.py results/run_X.json
 ```
 
 **Condiciones de reproducción:**
 1. **Required input data:** No aplica. El tráfico es sintético generado on-the-fly.
 2. **Configuration used:** MTU fijado a 1400 bytes para evitar fragmentación de IP. Flujo UDP de 100 Mbps constante.
 3. **Random seeds:** No aplica.
-4. **Expected output files:** Archivos JSON generados por `iperf3` con métricas de transferencia por segundo y salidas de consola de `ethtool`.
+4. **Expected output files:** Archivos JSON generados por `iperf3` procesables mediante Python para extracción de percentiles, y salidas de consola de `ethtool`.
 5. **Approximate execution time:** 45 minutos para inducir el estado Throttled con `stress-ng`, más 5 minutos (`-t 300`) por cada iteración de inyección de red.
 
 ## Dataset
@@ -92,7 +96,7 @@ No aplica para este proyecto. Todo el tráfico evaluado es generado de manera si
 
 ## Results
 
-Los resultados demuestran que bajo asfixia de AWS, el kernel carece de ciclos para procesar el encabezado extra de la red overlay.
+Los resultados demuestran que bajo asfixia de AWS, el kernel carece de ciclos para procesar el encabezado extra de la red overlay sin afectar severamente el rendimiento. Se pueden consultar los resultados iterativos en `results/RESULTS.md`.
 
 | Experiment | Metric | Result |
 |---|---:|---:|
